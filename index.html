@@ -24,11 +24,33 @@
                     spellcheck="false">
             </div>
 
-            <button id="distanceButton" type="button" disabled>Select distance</button>
-
             <div class="field">
-                <div class="label">Distance</div>
-                <output id="result">&mdash;</output>
+                <label for="calculateMode">Calculate</label>
+                <select id="calculateMode">
+                    <option value="length" selected>Length</option>
+                    <option value="area">Area</option>
+                </select>
+            </div>
+
+            <div id="lengthTools">
+                <button id="lineButton" type="button" disabled>Select broken line</button>
+                <div class="field">
+                    <div class="label">Distance</div>
+                    <output id="result">&mdash;</output>
+                </div>
+            </div>
+
+            <div id="areaTools" hidden>
+                <button id="wandButton" type="button" disabled>Magic wand</button>
+                <div class="field">
+                    <label for="thresholdSlider">Threshold: <span id="thresholdValue">32</span></label>
+                    <input type="range" id="thresholdSlider" min="0" max="255" value="32">
+                </div>
+                <label class="check"><input type="checkbox" id="adjacentToggle" checked> only adjacent</label>
+                <div class="field">
+                    <div class="label">Selected area</div>
+                    <output id="areaResult">&mdash;</output>
+                </div>
             </div>
 
             <p id="status">Select an image to begin.</p>
