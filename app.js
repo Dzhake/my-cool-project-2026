@@ -1,669 +1,761 @@
-"use strict";
+(() => {
+    "use strict";
 
-/* ---------------- DOM ---------------- */
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const viewer = document.getElementById("viewer");
+    const fileInput = document.getElementById("fileInput");
+    const selectImageButton = document.getElementById("selectImageButton");
+    const calcModeSelect = document.getElementById("calcMode");
+    const measurementButton = document.getElementById("measurementButton");
+    const measurementSizeInput = document.getElementById("measurementSize");
+    const lineButton = document.getElementById("lineButton");
+    const wandButton = document.getElementById("wandButton");
+    const thresholdInput = document.getElementById("threshold");
+    const thresholdValue = document.getElementById("thresholdValue");
+    const adjacentInput = document.getElementById("adjacent");
+    const resultEl = document.getElementById("result");
+    const selectionInfoEl = document.getElementById("selectionInfo");
+    const statusEl = document.getElementById("status");
+    const resetViewButton = document.getElementById("resetViewButton");
 
-const viewer = document.getElementById("viewer");
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
+    const tools = {
+        measurement: { el: document.getElementById("toolMeasurement"), arrow: document.getElementById("measurementArrow") },
+        distance: { el: document.getElementById("toolLine"), arrow: document.getElementById("lineArrow") },
+        wand: { el: document.getElementById("toolWand"), arrow: document.getElementById("wandArrow") }
+    };
 
-const fileInput = document.getElementById("fileInput");
-const selectImageButton = document.getElementById("selectImageButton");
-const measurementButton = document.getElementById("measurementButton");
-const measurementSizeInput = document.getElementById("measurementSize");
-const calculateMode = document.getElementById("calculateMode");
-const lengthTools = document.getElementById("lengthTools");
-const areaTools = document.getElementById("areaTools");
-const lineButton = document.getElementById("lineButton");
-const resultOutput = document.getElementById("result");
-const wandButton = document.getElementById("wandButton");
-const thresholdSlider = document.getElementById("thresholdSlider");
-const thresholdValue = document.getElementById("thresholdValue");
-const adjacentToggle = document.getElementById("adjacentToggle");
-const areaResultOutput = document.getElementById("areaResult");
-const resetViewButton = document.getElementById("resetViewButton");
-const statusEl = document.getElementById("status");
+    const state = {
+        image: null,
+        scale: 1,
+        offsetX: 0,
+        offsetY: 0,
+        userTransformed: false,
+        calcMode: "length",
+        mode: null,
+        pick: [],
+        preview: null,
+        points: { measurement: null, distance: null },
+        measurement: { value: null, unit: "" }
+    };
 
-/* ---------------- state ---------------- */
+    let mask = null;
+    let selection = null;
+    let selCount = 0;
+    let selCanvas = null;
+    let selCtx = null;
+    let selImageData = null;
+    let contours = [];
+    let pixelData = null;
+    let gesture = null;
+    const pointers = new Map();
+    let renderQueued = false;
 
-/* Points and polygons live in image space (original image pixels), so
-   panning and zooming never changes a measurement or a selection. */
+    const MIN_SCALE = 0.01;
+    const MAX_SCALE = 100;
+    const DOT_R = 5;
+    const NEAR_R = 6;
+    const GRAB_R = 9;
+    const DASH_SPEED = 0.02;
 
-const state = {
-    image: null,
-    imageData: null,        // pixel data of the image, for the magic wand
-    scale: 1,               // screen pixels per image pixel
-    offsetX: 0, offsetY: 0, // image origin position on the canvas
-    userTransformed: false,
-    calc: "length",         // the Calculate drop-down: "length" | "area"
-    mode: null,             // active tool: "measurement" | "line" | "wand"
-    pick: [],               // points of the pick in progress
-    preview: null,          // live cursor/finger position while picking
-    points: { measurement: null, line: null }, // completed picks
-    measurement: { value: null, unit: "" },
-    area: null,             // { mask: Uint8Array, count } - the selected pixels
-    areaPolys: [],          // boundary polygons of the selected area
-};
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-const MIN_SCALE = 0.01, MAX_SCALE = 100;
-const DOT_R = 5;  // marker dot radius in screen px
-const NEAR_R = 6; // a click this close (screen px) to the last dot finishes a pick
-
-const TOOL_HINTS = {
-    measurement: "Select the measurement: click (or tap) the first point, then the second.",
-    line: "Select the broken line: click (or tap) points along the path. " +
-        "Click near the last point or press Confirm to finish.",
-    wand: "Magic wand: click the image. Plain click replaces the area, " +
-        "Ctrl/Cmd subtracts, Shift adds, Ctrl/Cmd+Shift intersects.",
-};
-
-const OP_NAMES = { replace: "Replaced with", add: "Added", subtract: "Subtracted", intersect: "Intersected with" };
-
-/* "gesture" is what the current contact is doing: "pan" (drag the view),
-   "pinch" (two fingers) or "pick" (a press that selects on release). */
-let gesture = null;
-let panId = null;
-let panStart = null;
-let pinchStart = null;
-const touches = new Map(); // pointerId -> {cx, cy}
-
-/* ---------------- helpers ---------------- */
-
-const clampScale = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
-
-function pathLength(pts) {
-    let sum = 0;
-    for (let i = 1; i < pts.length; i++) {
-        sum += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    function requestRender() {
+        if (renderQueued) return;
+        renderQueued = true;
+        requestAnimationFrame(frame);
     }
-    return sum;
-}
 
-function setStatus(msg) { statusEl.textContent = msg; }
-
-function localFromClient(cx, cy) {
-    const r = canvas.getBoundingClientRect();
-    return { x: cx - r.left, y: cy - r.top };
-}
-function canvasPos(e) { return localFromClient(e.clientX, e.clientY); }
-function toImage(e) {
-    const p = canvasPos(e);
-    return { x: (p.x - state.offsetX) / state.scale, y: (p.y - state.offsetY) / state.scale };
-}
-function toScreen(p) {
-    return { x: state.offsetX + p.x * state.scale, y: state.offsetY + p.y * state.scale };
-}
-
-/* ---------------- rendering ---------------- */
-
-let drawScheduled = false;
-function scheduleDraw() {
-    if (drawScheduled) return;
-    drawScheduled = true;
-    requestAnimationFrame(() => { drawScheduled = false; draw(); });
-}
-
-function draw() {
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.width / dpr, h = canvas.height / dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#23272b";
-    ctx.fillRect(0, 0, w, h);
-
-    const img = state.image;
-    if (!img) return;
-    ctx.imageSmoothingEnabled = state.scale <= 1;
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(img, state.offsetX, state.offsetY,
-        img.naturalWidth * state.scale, img.naturalHeight * state.scale);
-
-    if (state.calc === "area") drawArea();
-    if (state.points.measurement) drawMarkerPath(state.points.measurement, 0.9, "#000");
-    if (state.points.line) drawMarkerPath(state.points.line, 0.9, "#fff");
-    if (state.mode && state.pick.length) {
-        const path = state.preview ? [...state.pick, state.preview] : state.pick;
-        drawMarkerPath(path, 0.55, state.mode === "measurement" ? "#000" : "#fff");
+    function frame(now) {
+        renderQueued = false;
+        draw(now);
+        if (animating()) requestRender();
     }
-}
 
-/* Half-transparent path of alternating black/white dashes with a dot on
-   every point; dotFill ("#000" or "#fff") picks the dot color. */
-function drawMarkerPath(pts, alpha, dotFill) {
-    const scr = pts.map(toScreen);
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([10, 10]);
-    for (let pass = 0; pass < 2; pass++) { // pass 1 paints white into the black gaps
-        ctx.strokeStyle = pass ? "#fff" : "#000";
-        ctx.lineDashOffset = pass ? 10 : 0;
-        ctx.beginPath();
-        ctx.moveTo(scr[0].x, scr[0].y);
-        for (let i = 1; i < scr.length; i++) ctx.lineTo(scr[i].x, scr[i].y);
-        ctx.stroke();
+    function animating() {
+        if (!state.image) return false;
+        if (state.calcMode === "area" && selCount > 0) return true;
+        if (state.pick.length || state.preview) return true;
+        if (state.points.measurement) return true;
+        if (state.calcMode === "length" && state.points.distance) return true;
+        return false;
     }
-    ctx.restore();
-    for (const p of scr) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, DOT_R, 0, Math.PI * 2);
-        ctx.fillStyle = dotFill;
-        ctx.strokeStyle = dotFill === "#000" ? "#fff" : "#000";
-        ctx.lineWidth = 2;
-        ctx.fill();
-        ctx.stroke();
+
+    function toImage(e) {
+        const r = canvas.getBoundingClientRect();
+        return { x: (e.clientX - r.left - state.offsetX) / state.scale, y: (e.clientY - r.top - state.offsetY) / state.scale };
     }
-}
 
-/* The selected area: translucent fill plus the dashed outline. Outer
-   contours and holes wind in opposite directions, so the default nonzero
-   fill rule leaves the holes empty. */
-function drawArea() {
-    if (!state.areaPolys.length) return;
-    ctx.save();
-    ctx.beginPath();
-    for (const loop of state.areaPolys) {
-        const s = loop.map(toScreen);
-        ctx.moveTo(s[0].x, s[0].y);
-        for (let i = 1; i < s.length; i++) ctx.lineTo(s[i].x, s[i].y);
-        ctx.closePath();
+    function toScreen(p) {
+        return { x: p.x * state.scale + state.offsetX, y: p.y * state.scale + state.offsetY };
     }
-    ctx.fillStyle = "rgba(255,255,255,0.2)";
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.setLineDash([10, 10]);
-    ctx.globalAlpha = 0.9;
-    for (let pass = 0; pass < 2; pass++) {
-        ctx.strokeStyle = pass ? "#fff" : "#000";
-        ctx.lineDashOffset = pass ? 10 : 0;
-        ctx.stroke();
+
+    function fitImage() {
+        if (!state.image) return;
+        const r = canvas.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) return;
+        const s = Math.min(r.width / state.image.width, r.height / state.image.height) * 0.98;
+        if (!isFinite(s) || s <= 0) return;
+        state.scale = s;
+        state.offsetX = (r.width - state.image.width * s) / 2;
+        state.offsetY = (r.height - state.image.height * s) / 2;
+        requestRender();
     }
-    ctx.restore();
-}
 
-/* ---------------- view: fit and reset ---------------- */
+    new ResizeObserver(() => {
+        if (!state.userTransformed) fitImage();
+        requestRender();
+    }).observe(viewer);
 
-function fitImage() {
-    const img = state.image;
-    if (!img) return;
-    const w = Math.max(1, viewer.clientWidth), h = Math.max(1, viewer.clientHeight);
-    state.scale = clampScale(Math.min(w / img.naturalWidth, h / img.naturalHeight) * 0.98);
-    state.offsetX = (w - img.naturalWidth * state.scale) / 2;
-    state.offsetY = (h - img.naturalHeight * state.scale) / 2;
-    scheduleDraw();
-}
+    selectImageButton.addEventListener("click", () => fileInput.click());
 
-function resizeCanvas() {
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(Math.max(1, viewer.clientWidth) * dpr);
-    canvas.height = Math.round(Math.max(1, viewer.clientHeight) * dpr);
-    if (state.image && !state.userTransformed) fitImage();
-    scheduleDraw();
-}
+    fileInput.addEventListener("change", () => {
+        const file = fileInput.files && fileInput.files[0];
+        fileInput.value = "";
+        if (!file) return;
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+            URL.revokeObjectURL(url);
+            state.image = img;
+            state.userTransformed = false;
+            state.mode = null;
+            state.pick = [];
+            state.preview = null;
+            state.points.measurement = null;
+            state.points.distance = null;
+            state.measurement = { value: null, unit: "" };
+            measurementSizeInput.value = "";
+            selection = null;
+            selCount = 0;
+            contours = [];
+            selImageData = null;
+            pixelData = null;
+            gesture = null;
+            pointers.clear();
+            fitImage();
+            updateButtons();
+            updateResult();
+            updateSelectionInfo();
+            setStatus("Image " + img.width + " × " + img.height + " px");
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            setStatus("Could not load the image.");
+        };
+        img.src = url;
+    });
 
-new ResizeObserver(resizeCanvas).observe(viewer);
-resizeCanvas();
+    calcModeSelect.addEventListener("change", () => {
+        state.calcMode = calcModeSelect.value;
+        document.body.classList.remove("mode-length", "mode-area");
+        document.body.classList.add("mode-" + state.calcMode);
+        cancelTool();
+        updateButtons();
+        updateResult();
+        updateSelectionInfo();
+        setStatus("");
+        requestRender();
+    });
 
-resetViewButton.addEventListener("click", () => {
-    state.userTransformed = false;
-    fitImage();
-    setStatus("View reset.");
-});
-
-/* ---------------- image loading ---------------- */
-
-selectImageButton.addEventListener("click", () => fileInput.click());
-
-fileInput.addEventListener("change", () => {
-    const file = fileInput.files && fileInput.files[0];
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-        URL.revokeObjectURL(url);
-        const off = document.createElement("canvas"); // pixel access for the magic wand
-        off.width = img.naturalWidth;
-        off.height = img.naturalHeight;
-        const octx = off.getContext("2d", { willReadFrequently: true });
-        octx.drawImage(img, 0, 0);
-        state.imageData = octx.getImageData(0, 0, off.width, off.height);
-
-        state.image = img;
-        state.userTransformed = false;
+    function cancelTool() {
         state.mode = null;
         state.pick = [];
         state.preview = null;
-        state.points.measurement = null; // old picks belong to the old image
-        state.points.line = null;
-        state.area = null;
-        state.areaPolys = [];
-        gesture = null;
-        touches.clear();
-        canvas.classList.remove("dragging");
-        fitImage();
-        updateButtons();
-        updateOutputs();
-        setStatus(`Loaded ${file.name} (${img.naturalWidth}\u00d7${img.naturalHeight} px). ` +
-            "Select the measurement, enter its size, then measure.");
-    };
-    img.onerror = () => {
-        URL.revokeObjectURL(url);
-        setStatus("Could not load that file as an image.");
-    };
-    img.src = url;
-    fileInput.value = ""; // lets the same file be picked again later
-});
-
-/* ---------------- tools (measurement / line / wand) ---------------- */
-
-measurementButton.addEventListener("click", () => modeButton("measurement"));
-lineButton.addEventListener("click", () => modeButton("line"));
-wandButton.addEventListener("click", () => modeButton("wand"));
-
-/* A tool button starts its tool, cancels it, or - for a broken line with
-   two or more points - confirms it. */
-function modeButton(kind) {
-    if (state.mode !== kind) startTool(kind);
-    else if (kind === "line" && state.pick.length >= 2) completeSelection();
-    else cancelTool();
-}
-
-function startTool(kind) {
-    state.mode = kind;
-    state.pick = [];
-    state.preview = null;
-    if (kind !== "wand") state.points[kind] = null; // starting fresh: drop the old selection
-    setStatus(TOOL_HINTS[kind]);
-    updateButtons();
-    updateOutputs();
-}
-
-function cancelTool() {
-    state.mode = null;
-    state.pick = [];
-    state.preview = null;
-    setStatus("Selection cancelled.");
-    updateButtons();
-}
-
-function completeSelection() {
-    const kind = state.mode;
-    if (!kind) return;
-    state.points[kind] = state.pick;
-    state.mode = null;
-    state.pick = [];
-    state.preview = null;
-    updateOutputs();
-    updateButtons();
-
-    const px = pathLength(state.points[kind]);
-    let msg = (kind === "measurement" ? "Measurement" : "Broken line") +
-        ` set: ${px.toFixed(1)} px in image space.`;
-    if (kind === "measurement" && state.measurement.value == null) msg += " Enter its real size above.";
-    if (kind === "line") msg += " The result is shown in the panel.";
-    setStatus(msg);
-}
-
-/* The press of a "pick" gesture ends here. */
-function appendPoint(p) {
-    state.pick.push(p);
-    state.preview = null;
-    if (state.mode === "measurement" && state.pick.length === 2) {
-        completeSelection(); // a measurement is exactly two points
-        return;
-    }
-    if (state.mode === "measurement") {
-        setStatus("First point set. Click (or tap) again to set the second point.");
-    } else {
-        const n = state.pick.length;
-        let msg = `${n} point${n > 1 ? "s" : ""}, ${pathLength(state.pick).toFixed(1)} px so far.`;
-        if (n >= 2) msg += " Click near the last point or press Confirm to finish.";
-        setStatus(msg);
-    }
-    updateButtons();
-}
-
-function updateButtons() {
-    measurementButton.textContent = state.mode === "measurement" ? "Cancel selection" : "Select measurement";
-    measurementButton.classList.toggle("cancel", state.mode === "measurement");
-    lineButton.textContent =
-        state.mode !== "line" ? "Select broken line"
-            : state.pick.length >= 2 ? "Confirm selection"
-                : "Cancel selection";
-    lineButton.classList.toggle("cancel", state.mode === "line" && state.pick.length < 2);
-    lineButton.classList.toggle("confirm", state.mode === "line" && state.pick.length >= 2);
-    wandButton.textContent = state.mode === "wand" ? "Cancel selection" : "Magic wand";
-    wandButton.classList.toggle("cancel", state.mode === "wand");
-    const noImage = !state.image;
-    for (const b of [measurementButton, lineButton, wandButton, resetViewButton]) b.disabled = noImage;
-    canvas.classList.toggle("selecting", !!state.mode);
-    scheduleDraw();
-}
-
-calculateMode.addEventListener("change", () => {
-    state.calc = calculateMode.value;
-    lengthTools.hidden = state.calc !== "length";
-    areaTools.hidden = state.calc !== "area";
-    // a tool of the other tab must not stay armed
-    if (state.mode && (state.mode === "wand") !== (state.calc === "area")) cancelTool();
-    scheduleDraw();
-});
-
-thresholdSlider.addEventListener("input", () => {
-    thresholdValue.textContent = thresholdSlider.value;
-});
-
-/* ---------------- measurement size input ---------------- */
-
-measurementSizeInput.addEventListener("input", () => {
-    const raw = measurementSizeInput.value.trim();
-    const m = /^([+-]?(?:\d+\.?\d*|\.\d+))\s*(.*)$/.exec(raw); // "2cm" -> 2, "cm"
-    if (m) {
-        state.measurement.value = parseFloat(m[1]);
-        state.measurement.unit = m[2].trim();
-        measurementSizeInput.classList.remove("invalid");
-    } else {
-        state.measurement.value = null;
-        state.measurement.unit = "";
-        measurementSizeInput.classList.toggle("invalid", raw !== "");
-    }
-    updateOutputs();
-});
-
-/* ---------------- outputs ---------------- */
-
-function updateOutputs() {
-    const size = state.measurement.value;
-    const meas = state.points.measurement;
-    const measPx = meas ? pathLength(meas) : 0;
-    const haveScale = size != null && measPx > 0;
-
-    const line = state.points.line;
-    resultOutput.textContent = haveScale && line
-        ? formatResult((size * pathLength(line)) / measPx) +
-        (state.measurement.unit ? " " + state.measurement.unit : "")
-        : "\u2014";
-
-    const px = state.area ? state.area.count : 0;
-    if (px > 0 && haveScale) {
-        const k = size / measPx; // real units per image pixel
-        areaResultOutput.textContent = formatResult(px * k * k) +
-            (state.measurement.unit ? " " + state.measurement.unit + "\u00b2" : "") +
-            ` (${px} px\u00b2)`;
-    } else {
-        areaResultOutput.textContent = px > 0 ? `${px} px\u00b2` : "\u2014";
-    }
-}
-
-function formatResult(v) {
-    if (!isFinite(v)) return "\u2014";
-    if (v === 0) return "0";
-    const abs = Math.abs(v);
-    if (abs >= 1e6 || abs < 1e-4) return v.toExponential(3);
-    return String(parseFloat(v.toPrecision(4)));
-}
-
-/* ---------------- magic wand ---------------- */
-
-/* Pixels whose RGB channels are all within the threshold of the clicked
-   pixel; flood filled from the click when "only adjacent" is on,
-   otherwise taken from the whole image. */
-function wandRegion(sx, sy) {
-    const w = state.image.naturalWidth, h = state.image.naturalHeight;
-    const data = state.imageData.data;
-    const i0 = (sy * w + sx) * 4;
-    const r0 = data[i0], g0 = data[i0 + 1], b0 = data[i0 + 2];
-    const t = +thresholdSlider.value;
-    const match = (i) => Math.abs(data[i] - r0) <= t &&
-        Math.abs(data[i + 1] - g0) <= t &&
-        Math.abs(data[i + 2] - b0) <= t;
-    const mask = new Uint8Array(w * h);
-    if (adjacentToggle.checked) {
-        const stack = [sy * w + sx];
-        while (stack.length) {
-            const i = stack.pop();
-            if (mask[i] || !match(i * 4)) continue;
-            mask[i] = 1;
-            const x = i % w, y = (i / w) | 0;
-            if (x > 0) stack.push(i - 1);
-            if (x < w - 1) stack.push(i + 1);
-            if (y > 0) stack.push(i - w);
-            if (y < h - 1) stack.push(i + w);
-        }
-    } else {
-        for (let i = 0; i < w * h; i++) mask[i] = match(i * 4) ? 1 : 0;
-    }
-    return mask;
-}
-
-/* A click with the shared hotkeys: none = replace, Ctrl = subtract,
-   Shift = add, Ctrl+Shift = intersect (Cmd works as Ctrl). */
-function runWand(p, e) {
-    const img = state.image;
-    const x = Math.floor(p.x), y = Math.floor(p.y);
-    if (x < 0 || y < 0 || x >= img.naturalWidth || y >= img.naturalHeight) {
-        setStatus("Click on the image itself.");
-        return;
-    }
-    const op = (e.ctrlKey || e.metaKey)
-        ? (e.shiftKey ? "intersect" : "subtract")
-        : (e.shiftKey ? "add" : "replace");
-    applyAreaOp(wandRegion(x, y), op);
-}
-
-/* Apply a region to the selected area with one of the four operations.
-   Any future selection tool can call this with its own region. */
-function applyAreaOp(region, op) {
-    const n = state.image.naturalWidth * state.image.naturalHeight;
-    let regionCount = 0;
-    for (let i = 0; i < n; i++) regionCount += region[i];
-
-    let mask = state.area ? state.area.mask : null;
-    if (op === "replace" || (op === "add" && !mask)) {
-        mask = region;
-    } else if (!mask) {
-        mask = new Uint8Array(n); // subtract/intersect with nothing selected
-    } else {
-        for (let i = 0; i < n; i++) {
-            mask[i] = op === "add" ? mask[i] | region[i]
-                : op === "subtract" ? mask[i] & ~region[i]
-                    : mask[i] & region[i];
-        }
     }
 
-    let count = 0;
-    for (let i = 0; i < n; i++) count += mask[i];
-    state.area = count ? { mask, count } : null;
-    state.areaPolys = count ? traceContours(mask) : [];
-
-    updateOutputs();
-    setStatus(`${OP_NAMES[op]} ${regionCount} px \u2192 ${count} px\u00b2 selected.`);
-    scheduleDraw();
-}
-
-/* Trace the boundary of a pixel mask into closed polygons (image
-   coordinates, running along the pixel edges). Every boundary side of a
-   selected pixel becomes a directed unit edge, oriented clockwise around
-   its pixel; following the edges (turning right where two loops touch)
-   yields the loops. Outer contours and holes wind in opposite ways. */
-function traceContours(mask) {
-    const w = state.image.naturalWidth, h = state.image.naturalHeight;
-    const stride = w + 1;                       // the vertex lattice is (w+1) wide
-    const STEP = { 1: 1, 2: stride, 4: -1, 8: -stride }; // per direction bit
-
-    const edges = new Map(); // vertex -> bitmask of outgoing directions: 1=+x 2=+y 4=-x 8=-y
-    const add = (key, dir) => edges.set(key, (edges.get(key) || 0) | dir);
-    for (let y = 0; y < h; y++) {
-        const row = y * w, vrow = y * stride;
-        for (let x = 0; x < w; x++) {
-            if (!mask[row + x]) continue;
-            if (y === 0 || !mask[row + x - w]) add(vrow + x, 1);                     // top side
-            if (x === w - 1 || !mask[row + x + 1]) add(vrow + x + 1, 2);             // right side
-            if (y === h - 1 || !mask[row + x + w]) add(vrow + stride + x + 1, 4);    // bottom side
-            if (x === 0 || !mask[row + x - 1]) add(vrow + stride + x, 8);            // left side
-        }
-    }
-
-    const loops = [];
-    const starts = [...edges.keys()];
-    for (let p = 0; p < starts.length;) {
-        const bitsHere = edges.get(starts[p]) || 0;
-        if (!bitsHere) { p++; continue; }
-        const startKey = starts[p];
-        let bit = bitsHere & -bitsHere;
-        const pts = [];
-        let key = startKey;
-        do {
-            edges.set(key, (edges.get(key) || 0) ^ bit); // consume the edge
-            pts.push({ x: key % stride, y: (key / stride) | 0 });
-            key += STEP[bit];
-            const b = edges.get(key) || 0;
-            if (!b) break; // cannot happen on a closed boundary; safety net
-            bit = (b & ((bit << 1) & 15 || 1)) || (b & -b); // prefer the right turn
-        } while (key !== startKey);
-        if (pts.length >= 4) loops.push(simplifyLoop(pts));
-    }
-    return loops;
-}
-
-/* Drop points where the loop does not turn (unit steps merge into lines). */
-function simplifyLoop(pts) {
-    const out = [];
-    const n = pts.length;
-    for (let i = 0; i < n; i++) {
-        const a = pts[(i + n - 1) % n], b = pts[i], c = pts[(i + 1) % n];
-        if ((b.x - a.x) * (c.y - b.y) !== (b.y - a.y) * (c.x - b.x)) out.push(b);
-    }
-    return out;
-}
-
-/* ---------------- pointer input (mouse + touch, unified) ---------------- */
-
-canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-
-canvas.addEventListener("pointerdown", (e) => {
-    const mouse = e.pointerType === "mouse";
-    const right = mouse && e.button === 2;
-    if (mouse && e.button !== 0 && !right) return; // ignore the middle button
-    canvas.setPointerCapture(e.pointerId);
-    if (!mouse) touches.set(e.pointerId, { cx: e.clientX, cy: e.clientY });
-
-    if (!mouse && touches.size >= 2) {
-        startPinch(); // a second finger: whatever went before becomes a pinch
-    } else if (right || !state.mode) {
-        startPanAt(e.pointerId, e.clientX, e.clientY); // right button always pans
-    } else if (state.pick.length >= 2 && nearLastDot(canvasPos(e))) {
-        completeSelection(); // pressed on the last dot: finish the pick
-    } else {
-        gesture = "pick"; // the selection happens wherever this press is released
-        state.preview = toImage(e);
-    }
-    scheduleDraw();
-});
-
-canvas.addEventListener("pointermove", (e) => {
-    if (touches.has(e.pointerId)) touches.set(e.pointerId, { cx: e.clientX, cy: e.clientY });
-
-    if (gesture === "pinch" && touches.size >= 2) {
-        const [a, b] = [...touches.values()];
-        const d = Math.hypot(a.cx - b.cx, a.cy - b.cy);
-        const mid = localFromClient((a.cx + b.cx) / 2, (a.cy + b.cy) / 2);
-        const s = clampScale(pinchStart.scale * (pinchStart.dist > 0 ? d / pinchStart.dist : 1));
-        state.scale = s;
-        state.offsetX = mid.x - pinchStart.img.x * s; // the image point under the midpoint stays put
-        state.offsetY = mid.y - pinchStart.img.y * s;
-        state.userTransformed = true;
-        scheduleDraw();
-    } else if (gesture === "pan" && e.pointerId === panId) {
-        state.offsetX = panStart.ox + (e.clientX - panStart.x);
-        state.offsetY = panStart.oy + (e.clientY - panStart.y);
-        state.userTransformed = true;
-        scheduleDraw();
-    } else if (gesture === "pick") {
-        state.preview = toImage(e);
-        scheduleDraw();
-    } else if (state.mode && state.pick.length) {
-        state.preview = toImage(e); // mouse hover: keep the line under the cursor
-        scheduleDraw();
-    }
-});
-
-canvas.addEventListener("pointerup", (e) => endPointer(e, false));
-canvas.addEventListener("pointercancel", (e) => endPointer(e, true));
-
-function endPointer(e, canceled) {
-    if (touches.has(e.pointerId)) touches.delete(e.pointerId);
-
-    if (gesture === "pick") {
-        gesture = null;
+    function completePick() {
+        state.points[state.mode] = state.pick.slice();
+        state.pick = [];
+        state.mode = null;
         state.preview = null;
-        if (!canceled && e.button === 0) {
-            if (state.mode === "wand") runWand(toImage(e), e);
-            else appendPoint(toImage(e));
+    }
+
+    function openToolOptions(kind) {
+        tools[kind].el.classList.remove("closed");
+        tools[kind].arrow.textContent = "▾";
+    }
+
+    for (const k of Object.keys(tools)) {
+        tools[k].arrow.addEventListener("click", () => {
+            tools[k].el.classList.toggle("closed");
+            tools[k].arrow.textContent = tools[k].el.classList.contains("closed") ? "▸" : "▾";
+        });
+    }
+
+    measurementButton.addEventListener("click", () => {
+        if (!state.image) return;
+        if (state.mode === "measurement") cancelTool();
+        else {
+            state.mode = "measurement";
+            state.pick = [];
+            state.points.measurement = null;
+            state.preview = null;
+            openToolOptions("measurement");
         }
-    } else if (gesture === "pinch") {
-        if (touches.size === 0) {
-            gesture = null;
-        } else if (touches.size === 1) {
-            const [id] = [...touches.keys()];
-            startPanAt(id, touches.get(id).cx, touches.get(id).cy); // last finger pans on
+        updateButtons();
+        updateResult();
+        setStatus(hint());
+    });
+
+    lineButton.addEventListener("click", () => {
+        if (!state.image) return;
+        if (state.mode === "distance") {
+            if (state.pick.length >= 2) completePick();
+            else cancelTool();
+        } else {
+            state.mode = "distance";
+            state.pick = [];
+            state.points.distance = null;
+            state.preview = null;
+            openToolOptions("distance");
         }
-    } else if (gesture === "pan") {
-        // a mouse pan ends when no button is left, a touch pan when no touch is left
-        const contactGone = e.pointerType === "mouse" ? e.buttons === 0 : touches.size === 0;
-        if (contactGone) {
-            gesture = null;
-            panId = null;
-            canvas.classList.remove("dragging");
+        updateButtons();
+        updateResult();
+        setStatus(hint());
+    });
+
+    wandButton.addEventListener("click", () => {
+        if (!state.image) return;
+        if (state.mode === "wand") cancelTool();
+        else {
+            state.mode = "wand";
+            state.pick = [];
+            state.preview = null;
+            openToolOptions("wand");
+        }
+        updateButtons();
+        setStatus(hint());
+    });
+
+    function hint() {
+        if (state.mode === "measurement") return "Pick 2 points on an object of known size.";
+        if (state.mode === "distance") return "Pick points along the line, click near the last point to confirm.";
+        if (state.mode === "wand") return "Click the image. Modifiers: none replace, Ctrl subtract, Shift add, Ctrl+Shift intersect.";
+        return "";
+    }
+
+    function setStatus(t) {
+        statusEl.textContent = t;
+    }
+
+    measurementSizeInput.addEventListener("input", () => {
+        const raw = measurementSizeInput.value.trim();
+        if (raw === "") {
+            state.measurement = { value: null, unit: "" };
+            setStatus("");
+            updateResult();
+            updateSelectionInfo();
+            return;
+        }
+        const m = raw.match(/^([+-]?(?:\d+\.?\d*|\.\d+))\s*(.*)$/);
+        if (!m) {
+            state.measurement = { value: null, unit: "" };
+            setStatus('Invalid size, e.g. "2 cm".');
+            updateResult();
+            updateSelectionInfo();
+            return;
+        }
+        state.measurement = { value: +m[1], unit: m[2] || "px" };
+        setStatus("");
+        updateResult();
+        updateSelectionInfo();
+    });
+
+    thresholdInput.addEventListener("input", () => {
+        thresholdValue.textContent = thresholdInput.value;
+    });
+
+    resetViewButton.addEventListener("click", () => {
+        state.userTransformed = false;
+        fitImage();
+    });
+
+    function updateButtons() {
+        const has = !!state.image;
+        measurementButton.disabled = !has;
+        lineButton.disabled = !has;
+        wandButton.disabled = !has;
+        resetViewButton.disabled = !has;
+        if (state.mode === "measurement") {
+            measurementButton.textContent = "Cancel selection";
+            measurementButton.classList.add("cancel");
+        } else {
+            measurementButton.textContent = "Select measurement";
+            measurementButton.classList.remove("cancel");
+        }
+        if (state.mode === "distance") {
+            if (state.pick.length >= 2) {
+                lineButton.textContent = "Confirm selection";
+                lineButton.classList.add("confirm");
+                lineButton.classList.remove("cancel");
+            } else {
+                lineButton.textContent = "Cancel selection";
+                lineButton.classList.add("cancel");
+                lineButton.classList.remove("confirm");
+            }
+        } else {
+            lineButton.textContent = "Select broken line";
+            lineButton.classList.remove("cancel", "confirm");
+        }
+        if (state.mode === "wand") {
+            wandButton.textContent = "Cancel wand";
+            wandButton.classList.add("cancel");
+        } else {
+            wandButton.textContent = "Magic wand";
+            wandButton.classList.remove("cancel");
+        }
+        canvas.classList.toggle("selecting", !!state.mode);
+    }
+
+    function pathLength(pts) {
+        let s = 0;
+        for (let i = 1; i < pts.length; i++) s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+        return s;
+    }
+
+    function fmt(v) {
+        return String(Number(v.toPrecision(5)));
+    }
+
+    function unitPerPixel() {
+        const mp = state.points.measurement;
+        if (!mp || mp.length < 2 || !state.measurement.value) return null;
+        const px = pathLength(mp);
+        if (px <= 0) return null;
+        return state.measurement.value / px;
+    }
+
+    function updateResult() {
+        const upp = unitPerPixel();
+        if (state.calcMode === "length") {
+            const dp = state.points.distance;
+            resultEl.textContent = upp && dp && dp.length >= 2 ? fmt(upp * pathLength(dp)) + " " + state.measurement.unit : "—";
+        } else if (selCount > 0 && upp) {
+            resultEl.textContent = fmt(upp * upp * selCount) + " " + state.measurement.unit + "²";
+        } else if (selCount > 0) {
+            resultEl.textContent = selCount.toLocaleString("en-US") + " px²";
+        } else {
+            resultEl.textContent = "—";
         }
     }
-    scheduleDraw();
-}
 
-function startPanAt(id, cx, cy) {
-    gesture = "pan";
-    panId = id;
-    panStart = { x: cx, y: cy, ox: state.offsetX, oy: state.offsetY };
-    state.preview = null;
-    canvas.classList.add("dragging");
-}
+    function updateSelectionInfo() {
+        if (state.calcMode !== "area" || selCount <= 0) {
+            selectionInfoEl.textContent = "";
+            return;
+        }
+        const upp = unitPerPixel();
+        selectionInfoEl.textContent = "Selection: " + selCount.toLocaleString("en-US") + " px" +
+            (upp ? " ≈ " + fmt(upp * upp * selCount) + " " + state.measurement.unit + "²" : "");
+    }
 
-function startPinch() {
-    gesture = "pinch";
-    state.preview = null;
-    const [a, b] = [...touches.values()];
-    const mid = localFromClient((a.cx + b.cx) / 2, (a.cy + b.cy) / 2);
-    pinchStart = {
-        dist: Math.hypot(a.cx - b.cx, a.cy - b.cy),
-        scale: state.scale,
-        img: { x: (mid.x - state.offsetX) / state.scale, y: (mid.y - state.offsetY) / state.scale },
-    };
-}
+    function toolMask() {
+        const n = state.image.width * state.image.height;
+        if (!mask || mask.length !== n) mask = new Uint8Array(n);
+        else mask.fill(0);
+        return mask;
+    }
 
-/* Pressing on the last dot of a pick finishes it (screen space). */
-function nearLastDot(screenPos) {
-    const last = toScreen(state.pick[state.pick.length - 1]);
-    return Math.hypot(last.x - screenPos.x, last.y - screenPos.y) <= NEAR_R;
-}
+    function ensureSelection() {
+        const n = state.image.width * state.image.height;
+        if (!selection || selection.length !== n) {
+            selection = new Uint8Array(n);
+            selCount = 0;
+        }
+        return selection;
+    }
 
-/* ---------------- wheel zoom ---------------- */
+    function imagePixels() {
+        if (!pixelData) {
+            const w = state.image.width, h = state.image.height;
+            const c = document.createElement("canvas");
+            c.width = w;
+            c.height = h;
+            const cx = c.getContext("2d", { willReadFrequently: true });
+            cx.drawImage(state.image, 0, 0);
+            pixelData = cx.getImageData(0, 0, w, h);
+        }
+        return pixelData;
+    }
 
-canvas.addEventListener("wheel", (e) => {
-    if (!state.image) return;
-    e.preventDefault();
-    let dy = e.deltaY;
-    if (e.deltaMode === 1) dy *= 32; // delta in lines (some browsers)
-    else if (e.deltaMode === 2) dy *= canvas.clientHeight; // delta in pages
-    const factor = Math.exp(-dy * 0.0015);
-    const p = canvasPos(e);
-    const s = clampScale(state.scale * factor);
-    state.offsetX = p.x - ((p.x - state.offsetX) / state.scale) * s; // zoom around the cursor
-    state.offsetY = p.y - ((p.y - state.offsetY) / state.scale) * s;
-    state.scale = s;
-    state.userTransformed = true;
-    if (state.mode && state.pick.length) state.preview = toImage(e);
-    scheduleDraw();
-}, { passive: false });
+    function runWand(p, mods) {
+        const w = state.image.width, h = state.image.height;
+        const data = imagePixels().data;
+        const m = toolMask();
+        const x = clamp(Math.floor(p.x), 0, w - 1);
+        const y = clamp(Math.floor(p.y), 0, h - 1);
+        const i0 = (y * w + x) * 4;
+        const r0 = data[i0], g0 = data[i0 + 1], b0 = data[i0 + 2], a0 = data[i0 + 3];
+        const t = +thresholdInput.value;
+        const similar = i => {
+            const q = i * 4;
+            return Math.abs(data[q] - r0) <= t && Math.abs(data[q + 1] - g0) <= t &&
+                Math.abs(data[q + 2] - b0) <= t && Math.abs(data[q + 3] - a0) <= t;
+        };
+        if (adjacentInput.checked) {
+            const stack = [y * w + x];
+            m[y * w + x] = 1;
+            while (stack.length) {
+                const i = stack.pop();
+                const px = i % w;
+                if (px > 0 && !m[i - 1] && similar(i - 1)) { m[i - 1] = 1; stack.push(i - 1); }
+                if (px < w - 1 && !m[i + 1] && similar(i + 1)) { m[i + 1] = 1; stack.push(i + 1); }
+                if (i >= w && !m[i - w] && similar(i - w)) { m[i - w] = 1; stack.push(i - w); }
+                if (i + w < m.length && !m[i + w] && similar(i + w)) { m[i + w] = 1; stack.push(i + w); }
+            }
+        } else {
+            for (let i = 0; i < m.length; i++) if (similar(i)) m[i] = 1;
+        }
+        applyOp(mods);
+    }
 
-/* ---------------- initial UI state ---------------- */
+    function applyOp(mods) {
+        const sel = ensureSelection();
+        if (mods.ctrl && mods.shift) {
+            for (let i = 0; i < sel.length; i++) sel[i] = sel[i] && mask[i];
+        } else if (mods.ctrl) {
+            for (let i = 0; i < sel.length; i++) sel[i] = sel[i] && !mask[i];
+        } else if (mods.shift) {
+            for (let i = 0; i < sel.length; i++) sel[i] = sel[i] || mask[i];
+        } else {
+            sel.set(mask);
+        }
+        let count = 0;
+        for (let i = 0; i < sel.length; i++) if (sel[i]) count++;
+        selCount = count;
+        rebuildSelectionView();
+        updateResult();
+        updateSelectionInfo();
+        requestRender();
+    }
 
-updateButtons();
-updateOutputs();
+    function rebuildSelectionView() {
+        const w = state.image.width, h = state.image.height, n = w * h;
+        if (!selCanvas) {
+            selCanvas = document.createElement("canvas");
+            selCtx = selCanvas.getContext("2d");
+        }
+        if (selCanvas.width !== w || selCanvas.height !== h) {
+            selCanvas.width = w;
+            selCanvas.height = h;
+            selImageData = null;
+        }
+        if (!selImageData) selImageData = selCtx.createImageData(w, h);
+        const d = selImageData.data;
+        for (let i = 0; i < n; i++) {
+            const q = i * 4;
+            if (selection[i]) {
+                d[q] = 255;
+                d[q + 1] = 145;
+                d[q + 2] = 40;
+                d[q + 3] = 96;
+            } else {
+                d[q + 3] = 0;
+            }
+        }
+        selCtx.putImageData(selImageData, 0, 0);
+        contours = traceContours(selection, w, h);
+    }
+
+    function traceContours(m, w, h) {
+        const edges = new Map();
+        const add = (sx, sy, ex, ey) => {
+            const k = sy * (w + 1) + sx;
+            let a = edges.get(k);
+            if (!a) edges.set(k, a = []);
+            a.push({ sx, sy, ex, ey });
+        };
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                if (!m[y * w + x]) continue;
+                if (y === 0 || !m[(y - 1) * w + x]) add(x, y, x + 1, y);
+                if (x === w - 1 || !m[y * w + x + 1]) add(x + 1, y, x + 1, y + 1);
+                if (y === h - 1 || !m[(y + 1) * w + x]) add(x + 1, y + 1, x, y + 1);
+                if (x === 0 || !m[y * w + x - 1]) add(x, y + 1, x, y);
+            }
+        }
+        const loops = [];
+        const limit = m.length * 4 + 8;
+        for (const arr of edges.values()) {
+            while (arr.length) {
+                const e0 = arr.pop();
+                const pts = [e0.sx, e0.sy];
+                let ex = e0.ex, ey = e0.ey, closed = false, guard = 0;
+                while (guard++ < limit) {
+                    if (ex === e0.sx && ey === e0.sy) { closed = true; break; }
+                    pts.push(ex, ey);
+                    const a = edges.get(ey * (w + 1) + ex);
+                    if (!a || !a.length) break;
+                    const e = a.pop();
+                    ex = e.ex;
+                    ey = e.ey;
+                }
+                if (closed) loops.push(pts);
+            }
+        }
+        return loops;
+    }
+
+    canvas.addEventListener("contextmenu", e => e.preventDefault());
+
+    canvas.addEventListener("pointerdown", e => {
+        if (!state.image) return;
+        canvas.setPointerCapture(e.pointerId);
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pointers.size === 2) { startPinch(); return; }
+        if (e.button === 2) { startPan(e); return; }
+        if (e.button !== 0) return;
+        if (state.mode === "wand") {
+            runWand(toImage(e), { ctrl: e.ctrlKey, shift: e.shiftKey });
+            return;
+        }
+        if (state.mode === "measurement" || state.mode === "distance") {
+            if (state.mode === "distance" && state.pick.length >= 2 && nearLastDot(e)) {
+                completePick();
+                updateButtons();
+                updateResult();
+                setStatus("");
+                requestRender();
+                return;
+            }
+            gesture = { type: "pick", id: e.pointerId };
+            return;
+        }
+        const hit = state.calcMode === "length" ? findPoint(e) : null;
+        if (hit) {
+            gesture = { type: "drag", id: e.pointerId, arr: hit.arr, i: hit.i };
+            return;
+        }
+        if (e.pointerType !== "mouse") startPan(e);
+    });
+
+    function startPan(e) {
+        gesture = { type: "pan", id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: state.offsetX, oy: state.offsetY };
+        state.userTransformed = true;
+        canvas.classList.add("dragging");
+    }
+
+    function startPinch() {
+        const pts = [...pointers.values()];
+        const d0 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        gesture = { type: "pinch", d0, scale0: state.scale, cx: (pts[0].x + pts[1].x) / 2, cy: (pts[0].y + pts[1].y) / 2, ox: state.offsetX, oy: state.offsetY };
+        state.userTransformed = true;
+        canvas.classList.add("dragging");
+    }
+
+    function updatePinch() {
+        if (!gesture || gesture.type !== "pinch") return;
+        const pts = [...pointers.values()];
+        if (pts.length < 2 || gesture.d0 <= 0) return;
+        const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        if (d <= 0) return;
+        const r = canvas.getBoundingClientRect();
+        const s = clamp(gesture.scale0 * d / gesture.d0, MIN_SCALE, MAX_SCALE);
+        const ix = (gesture.cx - r.left - gesture.ox) / gesture.scale0;
+        const iy = (gesture.cy - r.top - gesture.oy) / gesture.scale0;
+        state.scale = s;
+        state.offsetX = (pts[0].x + pts[1].x) / 2 - r.left - ix * s;
+        state.offsetY = (pts[0].y + pts[1].y) / 2 - r.top - iy * s;
+        requestRender();
+    }
+
+    canvas.addEventListener("pointermove", e => {
+        const p = pointers.get(e.pointerId);
+        if (p) { p.x = e.clientX; p.y = e.clientY; }
+        if (!state.image) return;
+        if (!gesture) {
+            if ((state.mode === "measurement" || state.mode === "distance") && e.pointerType === "mouse") {
+                state.preview = toImage(e);
+                requestRender();
+            }
+            return;
+        }
+        if (gesture.type === "pinch") { updatePinch(); return; }
+        if (e.pointerId !== gesture.id) return;
+        if (gesture.type === "pan") {
+            if (e.pointerType === "mouse" && e.buttons === 0) { endGesture(); return; }
+            state.offsetX = gesture.ox + e.clientX - gesture.sx;
+            state.offsetY = gesture.oy + e.clientY - gesture.sy;
+            requestRender();
+        } else if (gesture.type === "pick") {
+            state.preview = toImage(e);
+            requestRender();
+        } else if (gesture.type === "drag") {
+            gesture.arr[gesture.i] = toImage(e);
+            if (gesture.arr === state.points.distance) setStatus("Length: " + fmt(pathLength(gesture.arr)) + " px");
+            updateResult();
+            requestRender();
+        }
+    });
+
+    canvas.addEventListener("pointerup", e => {
+        pointers.delete(e.pointerId);
+        if (!gesture) return;
+        if (gesture.type === "pinch") {
+            const rest = [...pointers.entries()][0];
+            if (rest) gesture = { type: "pan", id: rest[0], sx: rest[1].x, sy: rest[1].y, ox: state.offsetX, oy: state.offsetY };
+            else endGesture();
+            return;
+        }
+        if (gesture.id !== e.pointerId) return;
+        if (gesture.type === "pick") appendPoint(toImage(e));
+        endGesture();
+    });
+
+    canvas.addEventListener("pointercancel", e => {
+        pointers.delete(e.pointerId);
+        if (gesture && (gesture.type === "pinch" || gesture.id === e.pointerId)) endGesture();
+    });
+
+    canvas.addEventListener("pointerleave", () => {
+        if (state.preview && !gesture) {
+            state.preview = null;
+            requestRender();
+        }
+    });
+
+    function endGesture() {
+        gesture = null;
+        canvas.classList.remove("dragging");
+    }
+
+    canvas.addEventListener("wheel", e => {
+        e.preventDefault();
+        if (!state.image) return;
+        let dy = e.deltaY;
+        if (e.deltaMode === 1) dy *= 16;
+        else if (e.deltaMode === 2) dy *= canvas.clientHeight;
+        zoomAt(e.clientX, e.clientY, Math.exp(-dy * 0.0015));
+    }, { passive: false });
+
+    function zoomAt(cx, cy, factor) {
+        const r = canvas.getBoundingClientRect();
+        const s = clamp(state.scale * factor, MIN_SCALE, MAX_SCALE);
+        const ix = (cx - r.left - state.offsetX) / state.scale;
+        const iy = (cy - r.top - state.offsetY) / state.scale;
+        state.scale = s;
+        state.offsetX = cx - r.left - ix * s;
+        state.offsetY = cy - r.top - iy * s;
+        state.userTransformed = true;
+        requestRender();
+    }
+
+    function nearLastDot(e) {
+        const r = canvas.getBoundingClientRect();
+        const p = toScreen(state.pick[state.pick.length - 1]);
+        return Math.hypot(e.clientX - r.left - p.x, e.clientY - r.top - p.y) <= NEAR_R;
+    }
+
+    function findPoint(e) {
+        const r = canvas.getBoundingClientRect();
+        const sx = e.clientX - r.left, sy = e.clientY - r.top;
+        let best = null, bestD = GRAB_R;
+        const lists = [];
+        if (state.points.measurement) lists.push(state.points.measurement);
+        if (state.calcMode === "length" && state.points.distance) lists.push(state.points.distance);
+        for (const arr of lists) {
+            for (let i = 0; i < arr.length; i++) {
+                const p = toScreen(arr[i]);
+                const d = Math.hypot(sx - p.x, sy - p.y);
+                if (d <= bestD) { bestD = d; best = { arr, i }; }
+            }
+        }
+        return best;
+    }
+
+    function appendPoint(p) {
+        state.pick.push(p);
+        if (state.mode === "measurement" && state.pick.length >= 2) {
+            completePick();
+            updateButtons();
+            updateResult();
+            setStatus("");
+        } else {
+            updateButtons();
+            setStatus(state.mode === "distance" && state.pick.length >= 2
+                ? "Length: " + fmt(pathLength(state.pick)) + " px, click near the last point to confirm."
+                : hint());
+        }
+        requestRender();
+    }
+
+    function draw(now) {
+        const d = window.devicePixelRatio || 1;
+        const r = canvas.getBoundingClientRect();
+        const cw = Math.max(1, Math.round(r.width * d));
+        const ch = Math.max(1, Math.round(r.height * d));
+        if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = "#101014";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        if (!state.image) return;
+        ctx.setTransform(d * state.scale, 0, 0, d * state.scale, d * state.offsetX, d * state.offsetY);
+        ctx.imageSmoothingEnabled = state.scale < 4;
+        ctx.drawImage(state.image, 0, 0);
+        if (state.calcMode === "area") {
+            if (selCanvas && selCount > 0) ctx.drawImage(selCanvas, 0, 0);
+            for (const loop of contours) drawContour(loop, 0.95, now);
+        }
+        if (state.points.measurement) drawPoints(state.points.measurement, 1, now);
+        if (state.calcMode === "length" && state.points.distance) drawPoints(state.points.distance, 1, now);
+        if (state.mode === "measurement" || state.mode === "distance") {
+            if (state.pick.length > 0) {
+                drawPoints(state.pick, 0.7, now);
+                if (state.preview) drawPoints(state.pick.concat([state.preview]), 0.45, now);
+            } else if (state.preview) {
+                drawDot(state.preview, 0.45);
+            }
+        }
+    }
+
+    function drawPoints(pts, alpha, now) {
+        if (pts.length < 2) {
+            drawDot(pts[0], alpha);
+            return;
+        }
+        const path = new Path2D();
+        path.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) path.lineTo(pts[i].x, pts[i].y);
+        strokeDashed(path, alpha, now);
+        for (const p of pts) drawDot(p, alpha);
+    }
+
+    function drawContour(flat, alpha, now) {
+        if (flat.length < 6) return;
+        const path = new Path2D();
+        path.moveTo(flat[0], flat[1]);
+        for (let i = 2; i < flat.length; i += 2) path.lineTo(flat[i], flat[i + 1]);
+        path.closePath();
+        strokeDashed(path, alpha, now);
+    }
+
+    function strokeDashed(path, alpha, now) {
+        const u = 1 / state.scale;
+        const phase = (now * DASH_SPEED) % 20;
+        ctx.lineWidth = 2 * u;
+        ctx.setLineDash([10 * u, 10 * u]);
+        ctx.strokeStyle = "rgba(255,255,255," + alpha + ")";
+        ctx.lineDashOffset = (10 - phase) * u;
+        ctx.stroke(path);
+        ctx.strokeStyle = "rgba(0,0,0," + alpha + ")";
+        ctx.lineDashOffset = -phase * u;
+        ctx.stroke(path);
+        ctx.setLineDash([]);
+    }
+
+    function drawDot(p, alpha) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, DOT_R / state.scale, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0,0,0," + alpha + ")";
+        ctx.fill();
+        ctx.lineWidth = 2 / state.scale;
+        ctx.strokeStyle = "rgba(255,255,255," + alpha + ")";
+        ctx.stroke();
+    }
+
+    updateButtons();
+    updateResult();
+    setStatus("Select an image to start.");
+    requestRender();
+})();

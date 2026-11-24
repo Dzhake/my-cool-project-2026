@@ -4,63 +4,68 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Image Measuring Tool</title>
+    <title>Image measurement</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
-<body>
+<body class="mode-length">
     <div id="app">
-        <aside id="panel">
-            <h1>Image measuring</h1>
-
-            <button id="selectImageButton" type="button">Select image</button>
+        <div id="panel">
+            <button id="selectImageButton">Select image</button>
             <input type="file" id="fileInput" accept="image/*" hidden>
 
-            <button id="measurementButton" type="button" disabled>Select measurement</button>
-
-            <div class="field">
-                <label for="measurementSize">Measurement size</label>
-                <input type="text" id="measurementSize" placeholder="e.g. 2cm, 12.5 mm, 0.7 in" autocomplete="off"
-                    spellcheck="false">
-            </div>
-
-            <div class="field">
-                <label for="calculateMode">Calculate</label>
-                <select id="calculateMode">
+            <div id="calcRow">
+                <label for="calcMode">Calculate</label>
+                <select id="calcMode">
                     <option value="length" selected>Length</option>
                     <option value="area">Area</option>
                 </select>
             </div>
 
-            <div id="lengthTools">
-                <button id="lineButton" type="button" disabled>Select broken line</button>
-                <div class="field">
-                    <div class="label">Distance</div>
-                    <output id="result">&mdash;</output>
+            <div class="tool" id="toolMeasurement">
+                <div class="toolRow">
+                    <button class="arrow" id="measurementArrow" type="button">▾</button>
+                    <button class="toolBtn" id="measurementButton" type="button">Select measurement</button>
+                </div>
+                <div class="options" id="measurementOptions">
+                    <label for="measurementSize">Size</label>
+                    <input type="text" id="measurementSize" placeholder="2 cm" autocomplete="off">
+                    <div class="hint">Pick 2 points on an object of known size.</div>
                 </div>
             </div>
 
-            <div id="areaTools" hidden>
-                <button id="wandButton" type="button" disabled>Magic wand</button>
-                <div class="field">
-                    <label for="thresholdSlider">Threshold: <span id="thresholdValue">32</span></label>
-                    <input type="range" id="thresholdSlider" min="0" max="255" value="32">
+            <div class="tool" id="toolLine">
+                <div class="toolRow">
+                    <button class="arrow" id="lineArrow" type="button">▾</button>
+                    <button class="toolBtn" id="lineButton" type="button">Select broken line</button>
                 </div>
-                <label class="check"><input type="checkbox" id="adjacentToggle" checked> only adjacent</label>
-                <div class="field">
-                    <div class="label">Selected area</div>
-                    <output id="areaResult">&mdash;</output>
+                <div class="options" id="lineOptions">
+                    <div class="hint">Pick points along the line. Click near the last point to confirm.</div>
                 </div>
             </div>
 
-            <p id="status">Select an image to begin.</p>
+            <div class="tool" id="toolWand">
+                <div class="toolRow">
+                    <button class="arrow" id="wandArrow" type="button">▾</button>
+                    <button class="toolBtn" id="wandButton" type="button">Magic wand</button>
+                </div>
+                <div class="options" id="wandOptions">
+                    <label for="threshold">Threshold <span id="thresholdValue">32</span></label>
+                    <input type="range" id="threshold" min="0" max="255" value="32">
+                    <label class="check"><input type="checkbox" id="adjacent" checked> Only adjacent</label>
+                    <div class="hint">Modifiers: none — replace, Ctrl — subtract, Shift — add, Ctrl+Shift — intersect.
+                    </div>
+                </div>
+            </div>
 
-            <button id="resetViewButton" type="button" disabled>Reset view</button>
-        </aside>
-
-        <main id="viewer">
+            <div id="selectionInfo"></div>
+            <output id="result"></output>
+            <div id="status"></div>
+            <button id="resetViewButton">Reset view</button>
+        </div>
+        <div id="viewer">
             <canvas id="canvas"></canvas>
-        </main>
+        </div>
     </div>
     <script src="app.js"></script>
 </body>

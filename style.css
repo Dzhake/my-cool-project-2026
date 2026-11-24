@@ -5,172 +5,46 @@
 html,
 body {
     height: 100%;
+    margin: 0;
 }
 
 body {
-    margin: 0;
-    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    color: #1c2126;
-    background: #f4f5f7;
-    overscroll-behavior: none;
+    font: 14px/1.4 system-ui, "Segoe UI", sans-serif;
+    color: #e8e8ec;
+    background: #101014;
+}
+
+button,
+label {
+    user-select: none;
 }
 
 #app {
     display: flex;
-    height: 100vh;
-    height: 100dvh;
+    height: 100%;
 }
-
-/* ---------- left panel ---------- */
 
 #panel {
-    flex: 0 0 262px;
     width: 262px;
-    padding: 14px;
+    flex: 0 0 262px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    background: #1b1b21;
+    border-right: 1px solid #2e2e38;
     overflow-y: auto;
-    background: #fff;
-    border-right: 1px solid #d9dce1;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
 }
 
-#panel h1 {
-    margin: 0 0 2px;
-    font-size: 16px;
+#panel>* {
+    flex: 0 0 auto;
 }
-
-button {
-    font: inherit;
-    padding: 8px 10px;
-    border: 1px solid #b6bcc4;
-    border-radius: 6px;
-    background: #fff;
-    color: #1c2126;
-    cursor: pointer;
-}
-
-button:hover:enabled {
-    background: #eef1f4;
-}
-
-button:disabled {
-    color: #9aa1a9;
-    background: #f2f3f5;
-    cursor: not-allowed;
-}
-
-button.cancel {
-    background: #fdeceb;
-    border-color: #e3a9a2;
-    color: #a02c21;
-}
-
-button.cancel:hover:enabled {
-    background: #f9dcda;
-}
-
-button.confirm {
-    background: #e5f4e9;
-    border-color: #9ccfa7;
-    color: #1e6b34;
-}
-
-button.confirm:hover:enabled {
-    background: #d6eedd;
-}
-
-#resetViewButton {
-    margin-top: auto;
-}
-
-.field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.field .label,
-.field label {
-    font-size: 12px;
-    font-weight: 600;
-    color: #5a626b;
-}
-
-.field input,
-select {
-    font: inherit;
-    padding: 7px 9px;
-    border: 1px solid #b6bcc4;
-    border-radius: 6px;
-    background: #fff;
-}
-
-.field input:focus,
-select:focus {
-    outline: 2px solid #8fb7e8;
-    outline-offset: -1px;
-}
-
-.field input.invalid {
-    border-color: #d9534f;
-    background: #fff5f5;
-}
-
-input[type="range"] {
-    width: 100%;
-    padding: 2px 0;
-    accent-color: #3d7ab5;
-}
-
-.check {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    user-select: none;
-}
-
-output {
-    font: 600 15px/1.3 ui-monospace, "Cascadia Mono", Consolas, monospace;
-    padding: 7px 9px;
-    min-height: 34px;
-    border: 1px dashed #b6bcc4;
-    border-radius: 6px;
-    background: #fafbfc;
-    display: flex;
-    align-items: center;
-    word-break: break-all;
-}
-
-#status {
-    margin: 2px 0 0;
-    font-size: 12px;
-    color: #5a626b;
-    min-height: 3em;
-}
-
-#lengthTools,
-#areaTools {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-#lengthTools[hidden],
-#areaTools[hidden] {
-    display: none;
-}
-
-/* ---------- image viewer ---------- */
 
 #viewer {
-    position: relative;
     flex: 1;
+    position: relative;
     min-width: 0;
-    min-height: 0;
-    background: #23272b;
-    overflow: hidden;
+    background: #101014;
 }
 
 #canvas {
@@ -180,8 +54,6 @@ output {
     height: 100%;
     display: block;
     touch-action: none;
-    /* needed so touches reach our pointer handlers */
-    cursor: grab;
 }
 
 #canvas.selecting {
@@ -192,7 +64,193 @@ output {
     cursor: grabbing;
 }
 
-/* ---------- small screens: panel moves on top ---------- */
+button,
+input,
+select {
+    font: inherit;
+}
+
+button {
+    padding: 7px 10px;
+    border: 1px solid #383844;
+    border-radius: 6px;
+    background: #26262e;
+    color: #e8e8ec;
+    cursor: pointer;
+}
+
+button:hover:enabled {
+    background: #2f2f39;
+}
+
+button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+button.cancel {
+    background: #57242a;
+    border-color: #7a3038;
+}
+
+button.cancel:hover:enabled {
+    background: #682b33;
+}
+
+button.confirm {
+    background: #1d4f31;
+    border-color: #2c7048;
+}
+
+button.confirm:hover:enabled {
+    background: #256041;
+}
+
+#calcRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#calcRow label {
+    color: #b9b9c4;
+}
+
+#calcRow select {
+    flex: 1;
+    background: #15151a;
+    color: #e8e8ec;
+    border: 1px solid #383844;
+    border-radius: 6px;
+    padding: 6px 8px;
+}
+
+.tool {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+}
+
+.toolRow {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+    width: 100%;
+}
+
+.toolRow .arrow {
+    flex: 0 0 26px;
+    padding: 0;
+    font-size: 11px;
+    color: #a9a9b6;
+}
+
+.toolRow .toolBtn {
+    flex: 1 1 auto;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.options {
+    width: calc(100% - 32px);
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 8px;
+    border: 1px solid #2e2e38;
+    border-radius: 6px;
+    background: #20202a;
+}
+
+.tool.closed .options {
+    display: none;
+}
+
+.options label {
+    font-size: 12px;
+    color: #b9b9c4;
+}
+
+.options input[type="text"] {
+    width: 100%;
+    background: #15151a;
+    color: #e8e8ec;
+    border: 1px solid #383844;
+    border-radius: 6px;
+    padding: 6px 8px;
+}
+
+.options input[type="range"] {
+    width: 100%;
+    accent-color: #e2903c;
+}
+
+.options .check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #b9b9c4;
+    cursor: pointer;
+}
+
+.options .check input {
+    accent-color: #e2903c;
+}
+
+.options .hint {
+    font-size: 11.5px;
+    color: #87879a;
+    line-height: 1.35;
+}
+
+#selectionInfo {
+    padding: 6px 9px;
+    border: 1px solid #2e2e38;
+    border-radius: 6px;
+    background: #20202a;
+    font-size: 12.5px;
+    color: #c6c6d2;
+}
+
+#selectionInfo:empty {
+    display: none;
+}
+
+#result {
+    display: flex;
+    align-items: center;
+    min-height: 36px;
+    padding: 7px 10px;
+    border: 1px dashed #3d3d4a;
+    border-radius: 6px;
+    font-size: 15px;
+}
+
+#status {
+    min-height: 17px;
+    font-size: 12px;
+    color: #8f8f9e;
+}
+
+#resetViewButton {
+    margin-top: auto;
+}
+
+body.mode-area #toolLine {
+    display: none;
+}
+
+body.mode-length #toolWand {
+    display: none;
+}
+
+body.mode-length #selectionInfo {
+    display: none;
+}
 
 @media (max-width: 640px) {
     #app {
@@ -200,10 +258,14 @@ output {
     }
 
     #panel {
+        width: 100%;
         flex: 0 0 auto;
-        width: auto;
-        max-height: 48dvh;
+        max-height: 46%;
         border-right: none;
-        border-bottom: 1px solid #d9dce1;
+        border-bottom: 1px solid #2e2e38;
+    }
+
+    #resetViewButton {
+        margin-top: 0;
     }
 }
