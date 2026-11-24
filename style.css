@@ -1,0 +1,130 @@
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #1c2126;
+  background: #f4f5f7;
+  overscroll-behavior: none;
+}
+
+#app {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* ---------- left panel ---------- */
+
+#panel {
+  flex: 0 0 262px;
+  width: 262px;
+  padding: 14px;
+  overflow-y: auto;
+  background: #fff;
+  border-right: 1px solid #d9dce1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#panel h1 {
+  margin: 0 0 2px;
+  font-size: 16px;
+}
+
+button {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid #b6bcc4;
+  border-radius: 6px;
+  background: #fff;
+  color: #1c2126;
+  cursor: pointer;
+}
+
+button:hover:enabled { background: #eef1f4; }
+button:disabled { color: #9aa1a9; background: #f2f3f5; cursor: not-allowed; }
+
+/* the "Cancel selection" state */
+button.cancel {
+  background: #fdeceb;
+  border-color: #e3a9a2;
+  color: #a02c21;
+}
+button.cancel:hover:enabled { background: #f9dcda; }
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field .label,
+.field label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #5a626b;
+}
+
+.field input {
+  font: inherit;
+  padding: 7px 9px;
+  border: 1px solid #b6bcc4;
+  border-radius: 6px;
+}
+.field input:focus { outline: 2px solid #8fb7e8; outline-offset: -1px; }
+.field input.invalid { border-color: #d9534f; background: #fff5f5; }
+
+#result {
+  font: 600 15px/1.3 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  padding: 7px 9px;
+  min-height: 34px;
+  border: 1px dashed #b6bcc4;
+  border-radius: 6px;
+  background: #fafbfc;
+  display: flex;
+  align-items: center;
+  word-break: break-all;
+}
+
+#status {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: #5a626b;
+  min-height: 3em;
+}
+
+/* ---------- image viewer ---------- */
+
+#viewer {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: #23272b;
+  overflow: hidden;
+}
+
+#canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;   /* needed so touches reach our pointer handlers */
+  cursor: grab;
+}
+#canvas.selecting { cursor: crosshair; }
+#canvas.dragging { cursor: grabbing; }
+
+/* ---------- small screens: panel moves on top ---------- */
+
+@media (max-width: 640px) {
+  #app { flex-direction: column; }
+  #panel {
+    flex: 0 0 auto;
+    width: auto;
+    max-height: 48dvh;
+    border-right: none;
+    border-bottom: 1px solid #d9dce1;
+  }
+}
