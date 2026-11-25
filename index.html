@@ -61,6 +61,17 @@
             <div id="selectionInfo"></div>
             <output id="result"></output>
             <div id="status"></div>
+
+            <div class="tool" id="toolSettings">
+                <div class="toolRow">
+                    <button class="arrow" id="settingsArrow" type="button">▾</button>
+                    <button class="toolBtn" id="settingsButton" type="button">Settings</button>
+                </div>
+                <div class="options" id="settingsOptions">
+                    <label class="check"><input type="checkbox" id="smoothSelection" checked> Smooth selection</label>
+                    <div class="hint">Rounds the outline for display. The area value is always exact.</div>
+                </div>
+            </div>
             <button id="resetViewButton">Reset view</button>
         </div>
         <div id="viewer">
