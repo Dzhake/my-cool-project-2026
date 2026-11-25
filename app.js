@@ -402,7 +402,6 @@ function workerMain(self) {
     let selBitmap = null;
     let wandBusy = false;
     let gesture = null;
-    const pointers = new Map();
     let renderQueued = false;
 
     // Selection outline cache. Contours arrive from the worker in image
@@ -638,7 +637,6 @@ function workerMain(self) {
             measurementSizeInput.value = "";
             gesture = null;
             wandBusy = false;
-            pointers.clear();
             clearSelectionView();
             // Decode once and hand the pixels to the worker (transferred, not copied).
             const c = document.createElement("canvas");
@@ -838,11 +836,11 @@ function workerMain(self) {
             lineButton.classList.remove("cancel", "confirm");
         }
         if (state.mode === "wand") {
-            wandButton.textContent = "Cancel wand";
-            wandButton.classList.add("cancel");
+            wandButton.textContent = "End wand";
+            wandButton.classList.add("confirm");
         } else {
             wandButton.textContent = "Magic wand";
-            wandButton.classList.remove("cancel");
+            wandButton.classList.remove("confirm");
         }
         canvas.classList.toggle("selecting", !!state.mode);
     }
@@ -899,6 +897,15 @@ function workerMain(self) {
 
     canvas.addEventListener("pointerdown", e => {
         if (!state.image) return;
+        // Middle and right mouse buttons always pan the view,
+        // no matter which tool is active.
+        if (e.button === 1 || e.button === 2) {
+            if (e.button === 1) e.preventDefault();
+            try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+            startPan(e);
+            return;
+        }
+        if (e.button !== 0) return;
         if (state.mode === "wand") {
             if (!wandBusy) {
                 const p = toImage(e);
@@ -915,12 +922,7 @@ function workerMain(self) {
             }
             return;
         }
-        try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* synthetic events */ }
-        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (pointers.size === 2) { startPinch(); return; }
-        if (e.button === 1) { e.preventDefault(); startPan(e); return; }
-        if (e.button === 2) { startPan(e); return; }
-        if (e.button !== 0) return;
+        try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
         if (state.mode === "measurement" || state.mode === "distance") {
             if (state.mode === "distance" && state.pick.length >= 2 && nearLastDot(e)) {
                 completePick();
@@ -938,7 +940,6 @@ function workerMain(self) {
             gesture = { type: "drag", id: e.pointerId, arr: hit.arr, i: hit.i };
             return;
         }
-        if (e.pointerType !== "mouse") startPan(e);
     });
 
     function startPan(e) {
@@ -947,46 +948,18 @@ function workerMain(self) {
         canvas.classList.add("dragging");
     }
 
-    function startPinch() {
-        const pts = [...pointers.values()];
-        const d0 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-        gesture = { type: "pinch", d0, scale0: state.scale, cx: (pts[0].x + pts[1].x) / 2, cy: (pts[0].y + pts[1].y) / 2, ox: state.offsetX, oy: state.offsetY };
-        state.userTransformed = true;
-        canvas.classList.add("dragging");
-    }
-
-    function updatePinch() {
-        if (!gesture || gesture.type !== "pinch") return;
-        const pts = [...pointers.values()];
-        if (pts.length < 2 || gesture.d0 <= 0) return;
-        const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-        if (d <= 0) return;
-        const r = canvas.getBoundingClientRect();
-        const s = clamp(gesture.scale0 * d / gesture.d0, MIN_SCALE, MAX_SCALE);
-        const ix = (gesture.cx - r.left - gesture.ox) / gesture.scale0;
-        const iy = (gesture.cy - r.top - gesture.oy) / gesture.scale0;
-        state.scale = s;
-        state.offsetX = (pts[0].x + pts[1].x) / 2 - r.left - ix * s;
-        state.offsetY = (pts[0].y + pts[1].y) / 2 - r.top - iy * s;
-        baseDirty = true;
-        requestRender();
-    }
-
     canvas.addEventListener("pointermove", e => {
-        const p = pointers.get(e.pointerId);
-        if (p) { p.x = e.clientX; p.y = e.clientY; }
         if (!state.image) return;
         if (!gesture) {
-            if ((state.mode === "measurement" || state.mode === "distance") && e.pointerType === "mouse") {
+            if (state.mode === "measurement" || state.mode === "distance") {
                 state.preview = toImage(e);
                 requestRender();
             }
             return;
         }
-        if (gesture.type === "pinch") { updatePinch(); return; }
         if (e.pointerId !== gesture.id) return;
         if (gesture.type === "pan") {
-            if (e.pointerType === "mouse" && e.buttons === 0) { endGesture(); return; }
+            if (e.buttons === 0) { endGesture(); return; }
             state.offsetX = gesture.ox + e.clientX - gesture.sx;
             state.offsetY = gesture.oy + e.clientY - gesture.sy;
             baseDirty = true;
@@ -1003,22 +976,10 @@ function workerMain(self) {
     });
 
     canvas.addEventListener("pointerup", e => {
-        pointers.delete(e.pointerId);
         if (!gesture) return;
-        if (gesture.type === "pinch") {
-            const rest = [...pointers.entries()][0];
-            if (rest) gesture = { type: "pan", id: rest[0], sx: rest[1].x, sy: rest[1].y, ox: state.offsetX, oy: state.offsetY };
-            else endGesture();
-            return;
-        }
         if (gesture.id !== e.pointerId) return;
         if (gesture.type === "pick") appendPoint(toImage(e));
         endGesture();
-    });
-
-    canvas.addEventListener("pointercancel", e => {
-        pointers.delete(e.pointerId);
-        if (gesture && (gesture.type === "pinch" || gesture.id === e.pointerId)) endGesture();
     });
 
     canvas.addEventListener("pointerleave", () => {
