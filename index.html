@@ -77,7 +77,20 @@
             <canvas id="canvas"></canvas>
         </div>
     </div>
-    <script src="app.js"></script>
+    <!-- app.js split into js/*.js — classic scripts sharing one global scope,
+         so the load order below matters. -->
+    <script src="js/core.js"></script>
+    <script src="js/worker-fill.js"></script>
+    <script src="js/worker-trace.js"></script>
+    <script src="js/worker-main.js"></script>
+    <script src="js/selection.js"></script>
+    <script src="js/view.js"></script>
+    <script src="js/render.js"></script>
+    <script src="js/image.js"></script>
+    <script src="js/tools.js"></script>
+    <script src="js/panel.js"></script>
+    <script src="js/input.js"></script>
+    <script src="js/main.js"></script>
 </body>
 
 </html>
